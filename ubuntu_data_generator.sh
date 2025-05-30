@@ -825,6 +825,23 @@ class LaikaDynamicsDataGenerator:
         self.log(f"Original dataset: {len(df):,} rows")
         
         try:
+            # Prepare data for CTGAN - handle categorical IDs properly
+            df_for_ctgan = df.copy()
+            
+            # Convert ID columns to categorical if they exist
+            id_columns = [col for col in df_for_ctgan.columns if col.endswith('_id')]
+            for col in id_columns:
+                if df_for_ctgan[col].dtype == 'object':
+                    df_for_ctgan[col] = df_for_ctgan[col].astype('category')
+            
+            # Handle null values - fill with appropriate defaults
+            for col in df_for_ctgan.columns:
+                if df_for_ctgan[col].isnull().any():
+                    if df_for_ctgan[col].dtype in ['int64', 'float64']:
+                        df_for_ctgan[col] = df_for_ctgan[col].fillna(df_for_ctgan[col].median())
+                    else:
+                        df_for_ctgan[col] = df_for_ctgan[col].fillna('Unknown')
+            
             # Configure CTGAN based on available resources (optimized for 18GB RAM)
             batch_size = min(3000, len(df))
             if psutil.virtual_memory().total < 18 * (1024**3):  # Less than 18GB RAM
@@ -846,7 +863,7 @@ class LaikaDynamicsDataGenerator:
             # Train the model
             self.log(f"Training CTGAN model with {epochs} epochs and batch size {batch_size}...")
             start_time = time.time()
-            ctgan.fit(df)
+            ctgan.fit(df_for_ctgan)
             training_time = time.time() - start_time
             self.log(f"Training completed in {training_time:.1f} seconds")
             
@@ -864,7 +881,7 @@ class LaikaDynamicsDataGenerator:
             self.log(f"Generating {synthetic_size:,} synthetic records...")
             synthetic_df = ctgan.sample(synthetic_size)
             
-            # Post-process to ensure data quality
+            # Post-process to ensure data quality and restore original ID format
             synthetic_df = self._post_process_synthetic_data(synthetic_df, df)
             
             self.log(f"Enhanced dataset: {len(synthetic_df):,} rows ({len(synthetic_df)/len(df):.1f}x increase)")
@@ -885,16 +902,21 @@ class LaikaDynamicsDataGenerator:
                 max_val = original_df[col].max() * 2.0
                 synthetic_df[col] = synthetic_df[col].clip(lower=min_val, upper=max_val)
         
-        # Clean up categorical data
+        # Clean up categorical data and regenerate proper IDs
         for col in synthetic_df.select_dtypes(include=['object']).columns:
             if col in original_df.columns:
-                valid_values = original_df[col].unique()
-                # Replace invalid synthetic values with random valid ones
-                invalid_mask = ~synthetic_df[col].isin(valid_values)
-                if invalid_mask.any():
-                    synthetic_df.loc[invalid_mask, col] = np.random.choice(
-                        valid_values, size=invalid_mask.sum()
-                    )
+                if col.endswith('_id'):
+                    # Regenerate proper IDs instead of using synthetic ones
+                    prefix = col.split('_')[0].upper()
+                    synthetic_df[col] = [f'{prefix}_{i:06d}' for i in range(len(synthetic_df))]
+                else:
+                    valid_values = original_df[col].unique()
+                    # Replace invalid synthetic values with random valid ones
+                    invalid_mask = ~synthetic_df[col].isin(valid_values)
+                    if invalid_mask.any():
+                        synthetic_df.loc[invalid_mask, col] = np.random.choice(
+                            valid_values, size=invalid_mask.sum()
+                        )
         
         return synthetic_df
     
@@ -909,7 +931,7 @@ class LaikaDynamicsDataGenerator:
             
             # Add noise to numeric columns
             for col in df_copy.select_dtypes(include=[np.number]).columns:
-                if col not in ['client_id', 'project_id', 'member_id']:  # Skip IDs
+                if col not in [c for c in df_copy.columns if c.endswith('_id')]:  # Skip IDs
                     noise = np.random.normal(0, df_copy[col].std() * 0.1, len(df_copy))
                     df_copy[col] = df_copy[col] + noise
                     df_copy[col] = df_copy[col].clip(lower=df_copy[col].min())
@@ -917,7 +939,8 @@ class LaikaDynamicsDataGenerator:
             # Update IDs to be unique
             for col in df_copy.columns:
                 if col.endswith('_id'):
-                    df_copy[col] = df_copy[col].str.replace(r'(\d+)', lambda m: f"{int(m.group(1)) + i * len(df):06d}", regex=True)
+                    prefix = col.split('_')[0].upper()
+                    df_copy[col] = [f'{prefix}_{j + i * len(df):06d}' for j in range(len(df))]
             
             scaled_dfs.append(df_copy)
         
@@ -1011,14 +1034,18 @@ class LaikaDynamicsDataGenerator:
         assignment_id = 0
         
         for _, project in projects_df.iterrows():
-            team_size = min(project['team_size'], len(team_df))
+            # Ensure team_size is an integer
+            team_size = int(min(project['team_size'], len(team_df)))
+            if team_size <= 0:
+                team_size = 1
+                
             assigned_members = team_df.sample(n=team_size)
             
             for _, member in assigned_members.iterrows():
                 role_on_project = random.choice(["Lead", "Developer", "Consultant", "Support"])
                 
                 # Hours allocation based on role and project complexity
-                base_hours = project['hours_estimated'] / team_size
+                base_hours = int(project['hours_estimated']) / team_size
                 if role_on_project == "Lead":
                     hours_allocated = int(base_hours * random.uniform(1.2, 1.5))
                 else:
@@ -1034,7 +1061,7 @@ class LaikaDynamicsDataGenerator:
                     'hours_allocated': hours_allocated,
                     'hours_logged': hours_logged,
                     'start_date': project['start_date'],
-                    'end_date': project['actual_end_date'] if project['actual_end_date'] else None
+                    'end_date': project['actual_end_date'] if pd.notna(project['actual_end_date']) else None
                 }
                 assignments.append(assignment)
                 assignment_id += 1
@@ -1356,8 +1383,10 @@ def main():
     print("2. Upload to VPS using: scp data/synthetic/*.csv user@194.238.17.65:~/laika-dynamics-rag/data/synthetic/")
     print("3. Restart RAG system to load new data")
 
-if __name__ == "__main__":
-    main()
+# Execute main function if script is run directly
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi
 EOF
 
     chmod +x scripts/generate_enterprise_data.py
@@ -1554,4 +1583,3 @@ main() {
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     main "$@"
 fi
-EOF
