@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Laika Dynamics CTGAN Data Generator for Ubuntu Server
-# Optimized for 24GB RAM and high-quality synthetic data generation
+# Optimized for 18GB RAM and high-quality synthetic data generation
 
 set -e
 
@@ -9,7 +9,7 @@ set -e
 PROJECT_DIR="$HOME/laika-data-generator"
 VENV_NAME="ctgan-env"
 PYTHON_VERSION="3.11"
-TARGET_RECORDS=100000  # Scale up with 24GB RAM
+TARGET_RECORDS=75000  # Optimized for 18GB RAM
 VPS_IP="194.238.17.65"
 
 # Colors for output
@@ -38,8 +38,8 @@ check_system() {
     
     # Check memory
     MEMORY_GB=$(free -g | awk '/^Mem:/{print $2}')
-    if [ $MEMORY_GB -lt 20 ]; then
-        warn "System has ${MEMORY_GB}GB RAM. 24GB recommended for optimal CTGAN performance."
+    if [ $MEMORY_GB -lt 16 ]; then
+        warn "System has ${MEMORY_GB}GB RAM. 18GB recommended for optimal CTGAN performance."
     else
         log "Memory check passed: ${MEMORY_GB}GB available"
     fi
@@ -735,30 +735,40 @@ class LaikaDynamicsDataGenerator:
         self.log(f"Original dataset: {len(df):,} rows")
         
         try:
-            # Configure CTGAN based on available resources
-            batch_size = min(5000, len(df))
-            if psutil.virtual_memory().total < 16 * (1024**3):  # Less than 16GB RAM
-                batch_size = min(1000, len(df))
+            # Configure CTGAN based on available resources (optimized for 18GB RAM)
+            batch_size = min(3000, len(df))
+            if psutil.virtual_memory().total < 18 * (1024**3):  # Less than 18GB RAM
+                batch_size = min(1500, len(df))
+                epochs = min(150, epochs)
+            elif psutil.virtual_memory().total < 12 * (1024**3):  # Less than 12GB RAM
+                batch_size = min(800, len(df))
                 epochs = min(100, epochs)
             
-            # Initialize CTGAN
+            # Initialize CTGAN with memory-optimized settings
             ctgan = CTGAN(
                 epochs=epochs,
                 batch_size=batch_size,
-                generator_dim=(256, 256),
-                discriminator_dim=(256, 256),
+                generator_dim=(128, 128),  # Reduced from (256, 256) for 18GB RAM
+                discriminator_dim=(128, 128),  # Reduced from (256, 256) for 18GB RAM
                 verbose=True
             )
             
             # Train the model
-            self.log(f"Training CTGAN model with {epochs} epochs...")
+            self.log(f"Training CTGAN model with {epochs} epochs and batch size {batch_size}...")
             start_time = time.time()
             ctgan.fit(df)
             training_time = time.time() - start_time
             self.log(f"Training completed in {training_time:.1f} seconds")
             
-            # Generate synthetic data
-            scale_factor = max(2, self.target_records // len(df))
+            # Generate synthetic data with conservative scaling for 18GB RAM
+            memory_gb = psutil.virtual_memory().total / (1024**3)
+            if memory_gb >= 18:
+                scale_factor = max(2, min(4, self.target_records // len(df)))
+            elif memory_gb >= 12:
+                scale_factor = max(2, min(3, self.target_records // len(df)))
+            else:
+                scale_factor = 2
+                
             synthetic_size = len(df) * scale_factor
             
             self.log(f"Generating {synthetic_size:,} synthetic records...")
@@ -774,7 +784,7 @@ class LaikaDynamicsDataGenerator:
         except Exception as e:
             self.log(f"CTGAN enhancement failed: {str(e)}")
             self.log("Falling back to rule-based scaling...")
-            return self._fallback_scaling(df, scale_factor=5)
+            return self._fallback_scaling(df, scale_factor=3)
     
     def _post_process_synthetic_data(self, synthetic_df: pd.DataFrame, original_df: pd.DataFrame) -> pd.DataFrame:
         """Clean and validate synthetic data"""
@@ -798,7 +808,7 @@ class LaikaDynamicsDataGenerator:
         
         return synthetic_df
     
-    def _fallback_scaling(self, df: pd.DataFrame, scale_factor: int = 5) -> pd.DataFrame:
+    def _fallback_scaling(self, df: pd.DataFrame, scale_factor: int = 3) -> pd.DataFrame:
         """Fallback method if CTGAN fails"""
         self.log("Using rule-based data multiplication...")
         
@@ -828,43 +838,59 @@ class LaikaDynamicsDataGenerator:
         self.log("Starting complete dataset generation...")
         start_time = time.time()
         
-        # Phase 1: Generate base realistic data
+        # Phase 1: Generate base realistic data (optimized for 18GB RAM)
         self.log("=== Phase 1: Base Data Generation ===")
-        clients_df = self.create_realistic_clients(1000)
-        team_df = self.create_realistic_team_members(50)
-        projects_df = self.create_realistic_projects(clients_df, 5000)
+        
+        # Adjust base sizes based on available memory
+        memory_gb = psutil.virtual_memory().total / (1024**3)
+        if memory_gb >= 18:
+            base_clients = 800
+            base_team = 45
+            base_projects = 3500
+        elif memory_gb >= 12:
+            base_clients = 600
+            base_team = 35
+            base_projects = 2500
+        else:
+            base_clients = 400
+            base_team = 25
+            base_projects = 1500
+        
+        clients_df = self.create_realistic_clients(base_clients)
+        team_df = self.create_realistic_team_members(base_team)
+        projects_df = self.create_realistic_projects(clients_df, base_projects)
         
         # Save base data as samples
         clients_df.to_csv(f'{self.real_samples_dir}/clients_base.csv', index=False)
         team_df.to_csv(f'{self.real_samples_dir}/team_members_base.csv', index=False)
         projects_df.to_csv(f'{self.real_samples_dir}/projects_base.csv', index=False)
         
-        # Phase 2: CTGAN Enhancement
+        # Phase 2: CTGAN Enhancement (optimized epochs for 18GB RAM)
         self.log("=== Phase 2: CTGAN Enhancement ===")
         
-        # Enhance each table with CTGAN
-        enhanced_clients = self.apply_ctgan_enhancement(clients_df, "clients", epochs=200)
-        enhanced_team = self.apply_ctgan_enhancement(team_df, "team_members", epochs=150)
-        enhanced_projects = self.apply_ctgan_enhancement(projects_df, "projects", epochs=300)
+        # Enhance each table with CTGAN using optimized epoch counts
+        enhanced_clients = self.apply_ctgan_enhancement(clients_df, "clients", epochs=150)  # Reduced from 200
+        enhanced_team = self.apply_ctgan_enhancement(team_df, "team_members", epochs=100)  # Reduced from 150
+        enhanced_projects = self.apply_ctgan_enhancement(projects_df, "projects", epochs=200)  # Reduced from 300
         
         # Phase 3: Generate dependent data
         self.log("=== Phase 3: Dependent Data Generation ===")
         
         # Generate project assignments
         assignments_df = self.create_project_assignments(enhanced_projects, enhanced_team)
-        enhanced_assignments = self.apply_ctgan_enhancement(assignments_df, "assignments", epochs=100)
+        enhanced_assignments = self.apply_ctgan_enhancement(assignments_df, "assignments", epochs=75)  # Reduced from 100
         
         # Generate tickets
         tickets_df = self.create_tickets(enhanced_projects, enhanced_team)
-        enhanced_tickets = self.apply_ctgan_enhancement(tickets_df, "tickets", epochs=200)
+        enhanced_tickets = self.apply_ctgan_enhancement(tickets_df, "tickets", epochs=120)  # Reduced from 200
         
         # Generate invoices
         invoices_df = self.create_invoices(enhanced_clients, enhanced_projects)
-        enhanced_invoices = self.apply_ctgan_enhancement(invoices_df, "invoices", epochs=150)
+        enhanced_invoices = self.apply_ctgan_enhancement(invoices_df, "invoices", epochs=100)  # Reduced from 150
         
         # Generate contracts
         contracts_df = self.create_contracts(enhanced_clients)
-        enhanced_contracts = self.apply_ctgan_enhancement(contracts_df, "contracts", epochs=100)
+        enhanced_contracts = self.apply_ctgan_enhancement(contracts_df, "contracts", epochs=75)  # Reduced from 100
         
         # Phase 4: Export final dataset
         self.log("=== Phase 4: Export & Validation ===")
@@ -1211,15 +1237,19 @@ def main():
     memory_gb = psutil.virtual_memory().total / (1024**3)
     print(f"Available RAM: {memory_gb:.1f} GB")
     
+    # Optimized for 18GB RAM limit
     if memory_gb < 8:
-        print("⚠️  Warning: Less than 8GB RAM detected. Consider reducing target records.")
-        target_records = 50000
-    elif memory_gb >= 24:
-        print("✅ Excellent! 24GB+ RAM detected. Using maximum settings.")
-        target_records = 200000
-    else:
+        print("⚠️  Warning: Less than 8GB RAM detected. Using minimal settings.")
+        target_records = 25000
+    elif memory_gb >= 18:
+        print("✅ Excellent! 18GB+ RAM detected. Using optimized settings.")
+        target_records = 120000  # Reduced from 150000 for more conservative approach
+    elif memory_gb >= 12:
         print("✅ Good! Sufficient RAM for standard generation.")
-        target_records = 100000
+        target_records = 75000
+    else:
+        print("⚠️  Limited RAM. Using reduced settings.")
+        target_records = 50000
     
     # Initialize generator
     generator = LaikaDynamicsDataGenerator(target_records=target_records)
@@ -1238,4 +1268,190 @@ def main():
 
 if __name__ == "__main__":
     main()
+EOF
+
+    chmod +x scripts/generate_enterprise_data.py
+}
+
+# Memory optimization function
+optimize_for_memory() {
+    log "Optimizing for 18GB RAM usage..."
+    
+    # Set memory-conscious environment variables
+    export PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:2048
+    export OMP_NUM_THREADS=4
+    export MKL_NUM_THREADS=4
+    
+    # Python memory optimizations
+    export PYTHONOPTIMIZE=1
+    export PYTHONDONTWRITEBYTECODE=1
+}
+
+# Enhanced data generator execution
+run_data_generator() {
+    log "Starting CTGAN data generation..."
+    cd "$PROJECT_DIR"
+    source $VENV_NAME/bin/activate
+    
+    # Apply memory optimizations
+    optimize_for_memory
+    
+    # Run the Python generator with memory monitoring
+    python scripts/generate_enterprise_data.py 2>&1 | tee generation.log
+    
+    if [ $? -eq 0 ]; then
+        log "Data generation completed successfully!"
+        log "Generated files:"
+        ls -la data/synthetic/
+    else
+        error "Data generation failed. Check generation.log for details."
+    fi
+}
+
+# Create deployment package
+create_deployment_package() {
+    log "Creating deployment package..."
+    cd "$PROJECT_DIR"
+    
+    # Create a compressed archive
+    tar -czf laika-dynamics-synthetic-data.tar.gz data/synthetic/
+    
+    log "Deployment package created: laika-dynamics-synthetic-data.tar.gz"
+    log "Size: $(du -h laika-dynamics-synthetic-data.tar.gz | cut -f1)"
+}
+
+# Upload to VPS function
+upload_to_vps() {
+    log "Preparing VPS upload instructions..."
+    
+    cat > upload_instructions.txt << 'EOF'
+# Laika Dynamics Data Upload Instructions
+
+## Upload synthetic data to VPS:
+scp laika-dynamics-synthetic-data.tar.gz user@194.238.17.65:~/
+
+## On VPS, extract and organize:
+ssh user@194.238.17.65
+cd ~/
+tar -xzf laika-dynamics-synthetic-data.tar.gz
+mkdir -p ~/laika-dynamics-rag/data/
+mv data/synthetic ~/laika-dynamics-rag/data/
+
+## Restart RAG services:
+cd ~/laika-dynamics-rag/
+docker-compose restart
+# or
+systemctl restart laika-rag-service
+
+## Verify data load:
+ls -la ~/laika-dynamics-rag/data/synthetic/
+EOF
+    
+    log "Upload instructions created: upload_instructions.txt"
+}
+
+# Performance monitoring
+monitor_performance() {
+    log "System performance monitoring during generation..."
+    
+    cat > scripts/monitor_resources.py << 'EOF'
+#!/usr/bin/env python3
+import psutil
+import time
+import json
+from datetime import datetime
+
+def monitor_resources(duration_minutes=30):
+    """Monitor system resources during data generation"""
+    print("Starting resource monitoring...")
+    
+    stats = []
+    start_time = time.time()
+    end_time = start_time + (duration_minutes * 60)
+    
+    while time.time() < end_time:
+        cpu_percent = psutil.cpu_percent(interval=1)
+        memory = psutil.virtual_memory()
+        disk = psutil.disk_usage('/')
+        
+        stat = {
+            'timestamp': datetime.now().isoformat(),
+            'cpu_percent': cpu_percent,
+            'memory_percent': memory.percent,
+            'memory_available_gb': memory.available / (1024**3),
+            'disk_free_gb': disk.free / (1024**3)
+        }
+        stats.append(stat)
+        
+        print(f"CPU: {cpu_percent:5.1f}% | RAM: {memory.percent:5.1f}% | Available: {memory.available/(1024**3):5.1f}GB")
+        
+        if memory.percent > 85:
+            print("⚠️  High memory usage detected!")
+        
+        time.sleep(30)  # Check every 30 seconds
+    
+    # Save monitoring results
+    with open('../monitoring_results.json', 'w') as f:
+        json.dump(stats, f, indent=2)
+    
+    print("Resource monitoring completed.")
+
+if __name__ == "__main__":
+    monitor_resources()
+EOF
+    
+    chmod +x scripts/monitor_resources.py
+}
+
+# Main execution flow
+main() {
+    log "🚀 Laika Dynamics CTGAN Data Generator - 18GB RAM Optimized"
+    log "Starting comprehensive data generation pipeline..."
+    
+    # Phase 1: System preparation
+    log "=== Phase 1: System Preparation ==="
+    check_system
+    setup_project
+    setup_python_env
+    
+    # Phase 2: Schema and generator creation
+    log "=== Phase 2: Schema & Generator Setup ==="
+    create_schemas
+    create_ctgan_generator
+    monitor_performance
+    
+    # Phase 3: Data generation
+    log "=== Phase 3: Data Generation ==="
+    run_data_generator
+    
+    # Phase 4: Packaging and deployment prep
+    log "=== Phase 4: Packaging & Deployment ==="
+    create_deployment_package
+    upload_to_vps
+    
+    log "🎉 All phases completed successfully!"
+    log "📁 Project directory: $PROJECT_DIR"
+    log "📦 Deployment package: $PROJECT_DIR/laika-dynamics-synthetic-data.tar.gz"
+    log "📋 Upload instructions: $PROJECT_DIR/upload_instructions.txt"
+    
+    echo ""
+    echo "==============================================="
+    echo "🎯 SUMMARY"
+    echo "==============================================="
+    echo "✅ CTGAN environment configured for 18GB RAM"
+    echo "✅ Synthetic data generation completed"
+    echo "✅ Deployment package created"
+    echo "✅ VPS upload instructions ready"
+    echo ""
+    echo "Next steps:"
+    echo "1. cd $PROJECT_DIR"
+    echo "2. Follow instructions in upload_instructions.txt"
+    echo "3. Monitor VPS RAG system integration"
+    echo "==============================================="
+}
+
+# Execute main function if script is run directly
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi
 EOF
