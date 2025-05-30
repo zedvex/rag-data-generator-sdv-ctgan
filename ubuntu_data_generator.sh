@@ -1384,9 +1384,8 @@ def main():
     print("3. Restart RAG system to load new data")
 
 # Execute main function if script is run directly
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    main "$@"
-fi
+if __name__ == "__main__":
+    main()
 EOF
 
     chmod +x scripts/generate_enterprise_data.py
