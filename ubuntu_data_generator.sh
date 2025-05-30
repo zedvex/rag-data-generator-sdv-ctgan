@@ -53,6 +53,21 @@ check_system() {
         log "Memory check passed: ${MEMORY_GB}GB available"
     fi
     
+    # Check disk space
+    DISK_FREE_GB=$(df / | awk 'NR==2 {print int($4/1024/1024)}')
+    log "Available disk space: ${DISK_FREE_GB}GB"
+    
+    if [ $DISK_FREE_GB -lt 10 ]; then
+        error "Insufficient disk space. Need at least 10GB free. Available: ${DISK_FREE_GB}GB"
+    elif [ $DISK_FREE_GB -lt 15 ]; then
+        warn "Low disk space detected: ${DISK_FREE_GB}GB. Consider freeing up space."
+        log "Installing with minimal dependencies..."
+        MINIMAL_INSTALL=true
+    else
+        log "Disk space check passed: ${DISK_FREE_GB}GB available"
+        MINIMAL_INSTALL=false
+    fi
+    
     # Check GPU
     if command -v nvidia-smi &> /dev/null; then
         log "NVIDIA GPU detected:"
@@ -67,6 +82,28 @@ check_system() {
     log "Updating Ubuntu packages..."
     sudo apt-get update -y
     sudo apt-get install -y python3 python3-pip python3-venv build-essential git wget curl
+}
+
+# Cleanup function to free disk space
+cleanup_system() {
+    log "Cleaning up system to free disk space..."
+    
+    # Clean package cache
+    sudo apt-get clean
+    sudo apt-get autoremove -y
+    
+    # Clean pip cache
+    if command -v pip3 &> /dev/null; then
+        pip3 cache purge || true
+    fi
+    
+    # Remove temporary files
+    sudo rm -rf /tmp/* || true
+    sudo rm -rf /var/tmp/* || true
+    
+    # Show available space after cleanup
+    DISK_FREE_AFTER=$(df / | awk 'NR==2 {print int($4/1024/1024)}')
+    log "Disk space after cleanup: ${DISK_FREE_AFTER}GB"
 }
 
 # Setup project directory
@@ -88,37 +125,75 @@ setup_python_env() {
         error "Python $PYTHON_VERSION not found. Please install it first."
     fi
     
+    # Clean up before starting
+    cleanup_system
+    
     python$PYTHON_VERSION -m venv $VENV_NAME
     source $VENV_NAME/bin/activate
     
     pip install --upgrade pip
     
-    # Install CTGAN and dependencies
-    log "Installing CTGAN and ML dependencies..."
-    if [ "$GPU_AVAILABLE" = true ]; then
-        # GPU version
-        pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+    # Install CTGAN and dependencies with disk space optimization
+    log "Installing ML dependencies (optimized for disk space)..."
+    
+    if [ "$MINIMAL_INSTALL" = true ]; then
+        # Minimal installation for low disk space
+        log "Using minimal installation due to disk space constraints..."
+        
+        # Install PyTorch CPU-only (smaller)
+        pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+        
+        # Install essential packages only
+        pip install --no-cache-dir \
+            pandas \
+            numpy \
+            faker \
+            psutil \
+            tqdm \
+            ctgan
+            
+        log "Minimal installation completed. Some visualization features may be limited."
+        
     else
-        # CPU version
-        pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+        # Full installation
+        if [ "$GPU_AVAILABLE" = true ]; then
+            # GPU version
+            pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+        else
+            # CPU version
+            pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+        fi
+        
+        # Install in batches to manage disk space
+        log "Installing core ML packages..."
+        pip install --no-cache-dir \
+            pandas \
+            numpy \
+            faker \
+            psutil \
+            tqdm \
+            ctgan
+        
+        log "Installing additional packages..."
+        pip install --no-cache-dir \
+            sdv[tabular] \
+            matplotlib \
+            seaborn \
+            scipy \
+            scikit-learn
+        
+        log "Installing utility packages..."    
+        pip install --no-cache-dir \
+            jupyter \
+            plotly \
+            openpyxl \
+            requests
     fi
     
-    pip install \
-        sdv[tabular] \
-        pandas \
-        numpy \
-        matplotlib \
-        seaborn \
-        jupyter \
-        faker \
-        psutil \
-        tqdm \
-        plotly \
-        openpyxl \
-        requests \
-        ctgan \
-        scipy \
-        scikit-learn
+    # Clean up pip cache after installation
+    pip cache purge || true
+    
+    log "Python environment setup completed successfully!"
 }
 
 # Create realistic seed data schemas
@@ -1426,6 +1501,7 @@ main() {
     # Phase 1: System preparation
     log "=== Phase 1: System Preparation ==="
     check_system
+    cleanup_system  # Clean up before starting
     setup_project
     setup_python_env
     
@@ -1444,10 +1520,18 @@ main() {
     create_deployment_package
     upload_to_vps
     
+    # Final cleanup
+    log "=== Phase 5: Cleanup ==="
+    cleanup_system
+    
     log "🎉 All phases completed successfully!"
     log "📁 Project directory: $PROJECT_DIR"
     log "📦 Deployment package: $PROJECT_DIR/laika-dynamics-synthetic-data.tar.gz"
     log "📋 Upload instructions: $PROJECT_DIR/upload_instructions.txt"
+    
+    # Final disk space check
+    FINAL_DISK_FREE=$(df / | awk 'NR==2 {print int($4/1024/1024)}')
+    log "Final disk space available: ${FINAL_DISK_FREE}GB"
     
     echo ""
     echo "==============================================="
@@ -1457,6 +1541,7 @@ main() {
     echo "✅ Synthetic data generation completed"
     echo "✅ Deployment package created"
     echo "✅ VPS upload instructions ready"
+    echo "✅ System cleanup completed"
     echo ""
     echo "Next steps:"
     echo "1. cd $PROJECT_DIR"
