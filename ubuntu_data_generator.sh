@@ -8,7 +8,16 @@ set -e
 # Configuration
 PROJECT_DIR="$HOME/laika-data-generator"
 VENV_NAME="ctgan-env"
-PYTHON_VERSION="3.11"
+# Auto-detect available Python version
+if command -v python3.12 &> /dev/null; then
+    PYTHON_VERSION="3.12"
+elif command -v python3.11 &> /dev/null; then
+    PYTHON_VERSION="3.11"
+elif command -v python3.10 &> /dev/null; then
+    PYTHON_VERSION="3.10"
+else
+    PYTHON_VERSION="3"
+fi
 TARGET_RECORDS=75000  # Optimized for 18GB RAM
 VPS_IP="194.238.17.65"
 
@@ -71,7 +80,13 @@ setup_project() {
 # Setup Python environment with GPU support
 setup_python_env() {
     log "Setting up Python environment for CTGAN..."
+    log "Detected Python version: $PYTHON_VERSION"
     cd "$PROJECT_DIR"
+    
+    # Check if the detected Python version actually works
+    if ! command -v python$PYTHON_VERSION &> /dev/null; then
+        error "Python $PYTHON_VERSION not found. Please install it first."
+    fi
     
     python$PYTHON_VERSION -m venv $VENV_NAME
     source $VENV_NAME/bin/activate
